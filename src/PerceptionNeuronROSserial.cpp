@@ -22,7 +22,7 @@
 #include <stdio.h>
 #include "NeuronDataReader.h"
 #include "SocketCommand.h"
-
+#include <mutex>
 
 SOCKET_REF sockTCPREF = NULL;
 FrameDataReceived _DataReceived;
@@ -31,10 +31,12 @@ BvhDataHeader     _bvhHeader;
 SocketStatusChanged    _SocketStatusChanged;
 
 
-float * _valuesBuffer=NULL;
+float * _valuesBuffer = NULL;
 int _frameCount = 0;
 int bufferLength = 0;
 bool bCallbacks = false;
+
+std::mutex ctrl;
 
 // Max Array Length for ROS Data = 255  should be for UINT8 (-> data_msg.data_length )
 // But not working maybe they used somewhere signed int8
@@ -49,12 +51,14 @@ struct MyCallbacks {
 	static void __stdcall bvhDataReceived(void * customObject, SOCKET_REF sockRef, BvhDataHeader* header, float * data)
 	{
 		BvhDataHeader * ptr = header;
+		ctrl.lock();
 		if (ptr->DataCount != bufferLength || _valuesBuffer == NULL) {
 			_valuesBuffer = new float[ptr->DataCount];
 			bufferLength = ptr->DataCount;
 		}
-		memcpy((char *)_valuesBuffer, (char*)data, (int)ptr->DataCount*sizeof(float));
+		memcpy((char *)_valuesBuffer, (char*)data, (int)ptr->DataCount * sizeof(float));
 		_frameCount++;
+		ctrl.unlock();
 
 	}
 	static void __stdcall calculationDataReceived(void* customedObj, SOCKET_REF sockRef, CalcDataHeader* header, float* data) {
@@ -88,9 +92,6 @@ struct MyCallbacks {
 MyCallbacks cbks;
 
 
-
-
-
 void prepareDataMsg(std_msgs::Float64MultiArray & data_msg) {
 	data_msg.layout.dim = (std_msgs::MultiArrayDimension *) malloc(sizeof(std_msgs::MultiArrayDimension) * 2);
 	data_msg.layout.dim[0].label = "PerceptionNeuronData";
@@ -109,6 +110,7 @@ int main(int argc, _TCHAR * argv[])
 	std::string ipAxisNeuron = "192.168.1.5";
 	std::string ipROS = "192.168.1.4";
 	int portAxisNeuron = 7001;
+
 	bool verbose = true;
 
 	// read config file
@@ -141,10 +143,10 @@ int main(int argc, _TCHAR * argv[])
 	}
 	else
 	{
-		printf("Unable to open config.txt file.. using DEFAULT values. \n" );
+		printf("Unable to open config.txt file.. using DEFAULT values. \n");
 		printf("ROS Master (Serial Windwos): 192.168.1.4, Axis Neuron 192.168.1.5. \n");
 		printf("The config file will be read if use the commandline \n");
-		printf( "  cd to PerceptionNeuronROSSerial path, start PerceptionNeuronROSserial.exe .. \n");
+		printf("  cd to PerceptionNeuronROSSerial path, start PerceptionNeuronROSserial.exe .. \n");
 	}
 
 	// ROS Handle
@@ -153,7 +155,7 @@ int main(int argc, _TCHAR * argv[])
 	strcpy(ros_master, ipROS.c_str());
 
 	printf("\nConnecting to ROS Master (ROS Serial Server) at %s \n", ros_master);
-	 nh.initNode(ros_master);
+	nh.initNode(ros_master);
 	// Neuron Connection
 	void * neuronptr = NULL;
 	if (BRGetSocketStatus(neuronptr) == SocketStatus::CS_Running) {
@@ -166,14 +168,14 @@ int main(int argc, _TCHAR * argv[])
 	char *nIP = new char[ipAxisNeuron.length() + 1];
 	strcpy(nIP, ipAxisNeuron.c_str());
 
-	printf("Okay, calluing BRConnectTo IP: %s port %d\n",nIP,portAxisNeuron);
+	printf("Okay, calluing BRConnectTo IP: %s port %d\n", nIP, portAxisNeuron);
 
 
 	neuronptr = BRConnectTo(nIP, portAxisNeuron);
 	if (neuronptr == NULL) {
 		printf("Axis Neuron Connection refused! \n ");
 		printf("Trying again... \n");
-			//return 0;
+		//return 0;
 	}
 	else {
 		printf("Connected to Axis Neuron at %s \n", nIP);
@@ -208,16 +210,17 @@ int main(int argc, _TCHAR * argv[])
 	{
 
 		if (verbose) {
-			printf("Current Data Frame %i \n", _frameCount);
+			printf(" Current Data Frame %i \n", _frameCount);
 		}
 
-		 // check that it have already received values from Axis Neuron
+		ctrl.lock();
+		// check that it have already received values from Axis Neuron
 		if (_valuesBuffer != NULL && _valuesBuffer[114]) {
 
 			for (int i = 0; i < MAX_DATA_LENGTH; i++) {
 				data_msg_1.data[i] = _valuesBuffer[i];
 				data_msg_2.data[i] = _valuesBuffer[i + MAX_DATA_LENGTH];
-				data_msg_3.data[i] = _valuesBuffer[i + 2*MAX_DATA_LENGTH];
+				data_msg_3.data[i] = _valuesBuffer[i + 2 * MAX_DATA_LENGTH];
 			}
 			// Publish part one of the array
 			data_pub_1.publish(&data_msg_1);
@@ -225,7 +228,7 @@ int main(int argc, _TCHAR * argv[])
 			data_pub_3.publish(&data_msg_3);
 
 		}
-
+		ctrl.unlock();
 		nh.spinOnce();
 		Sleep(50);
 	}
