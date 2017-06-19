@@ -21,7 +21,6 @@
 #include "WindowsSocket.h"
 #include <stdio.h>
 #include "NeuronDataReader.h"
-#include "SocketCommand.h"
 #include <mutex>
 
 SOCKET_REF sockTCPREF = NULL;
