@@ -23,6 +23,9 @@
 #include "NeuronDataReader.h"
 #include <mutex>
 
+#define BVH_PORT 	7001
+#define CALC_PORT 7003
+
 SOCKET_REF sockTCPREF = NULL;
 FrameDataReceived _DataReceived;
 CalculationDataReceived _CmdDataReceived;
@@ -34,7 +37,6 @@ float * _valuesBuffer = NULL;
 int _frameCount = 0;
 int bufferLength = 0;
 bool bCallbacks = false;
-
 std::mutex ctrl;
 
 // Max Array Length for ROS Data = 255  should be for UINT8 (-> data_msg.data_length )
@@ -58,33 +60,33 @@ struct MyCallbacks {
 		memcpy((char *)_valuesBuffer, (char*)data, (int)ptr->DataCount * sizeof(float));
 		_frameCount++;
 		ctrl.unlock();
-
 	}
+
 	static void __stdcall calculationDataReceived(void* customedObj, SOCKET_REF sockRef, CalcDataHeader* header, float* data) {
-		printf("Data received!! \n");
+		ctrl.lock();
+		if (header->DataCount != bufferLength || _valuesBuffer == NULL) {
+			_valuesBuffer = new float[header->DataCount];
+			bufferLength = header->DataCount;
+		}
+		memcpy((char *)_valuesBuffer, (char*)data, (int)header->DataCount * sizeof(float));
+		_frameCount++;
+		ctrl.unlock();
 	}
 
 	static void __stdcall socketStatusChanged(void * customObject, SOCKET_REF sockRef, SocketStatus status, char * message) {
 		printf("Socket status changed\n");
-
 	}
-
 
 	virtual void registerNeuronCallbacks() {
 		bool bBVH = false;
 		bool bCmd = false;
 		bool bSSt = false;
 
-
 		BRRegisterFrameDataCallback(this, bvhDataReceived);
-
 		BRRegisterCalculationDataCallback(this, calculationDataReceived);
-
 		BRRegisterSocketStatusCallback(this, socketStatusChanged);
-
 		printf("Register Neuron Callbacks");
 	}
-
 
 };
 
@@ -180,8 +182,6 @@ int main(int argc, _TCHAR * argv[])
 		printf("Connected to Axis Neuron at %s \n", nIP);
 	}
 
-
-
 	cbks.registerNeuronCallbacks();
 
 	printf("\n \nAdvertising Axis Neuron Data to ROS Serial Server\n");
@@ -194,43 +194,77 @@ int main(int argc, _TCHAR * argv[])
 	prepareDataMsg(data_msg_2);
 	prepareDataMsg(data_msg_3);
 
+	if(portAxisNeuron == BVH_PORT) {
+		ros::Publisher data_pub_1("/perception_neuron/data_1", &data_msg_1);
+		ros::Publisher data_pub_2("/perception_neuron/data_2", &data_msg_2);
+		ros::Publisher data_pub_3("/perception_neuron/data_3", &data_msg_3);
 
-	ros::Publisher data_pub_1("/perception_neuron/data_1", &data_msg_1);
-	ros::Publisher data_pub_2("/perception_neuron/data_2", &data_msg_2);
-	ros::Publisher data_pub_3("/perception_neuron/data_3", &data_msg_3);
-
-
-	nh.advertise(data_pub_1);
-	nh.advertise(data_pub_2);
-	nh.advertise(data_pub_3);
-
-
-	while (1)
-	{
-
-		if (verbose) {
-			printf(" Current Data Frame %i \n", _frameCount);
-		}
-
-		ctrl.lock();
-		// check that it have already received values from Axis Neuron
-		if (_valuesBuffer != NULL && _valuesBuffer[114]) {
-
-			for (int i = 0; i < MAX_DATA_LENGTH; i++) {
-				data_msg_1.data[i] = _valuesBuffer[i];
-				data_msg_2.data[i] = _valuesBuffer[i + MAX_DATA_LENGTH];
-				data_msg_3.data[i] = _valuesBuffer[i + 2 * MAX_DATA_LENGTH];
+		nh.advertise(data_pub_1);
+		nh.advertise(data_pub_2);
+		nh.advertise(data_pub_3);
+		while (1)
+		{
+			if (verbose) {
+				printf(" Current Data Frame %i \n", _frameCount);
 			}
-			// Publish part one of the array
-			data_pub_1.publish(&data_msg_1);
-			data_pub_2.publish(&data_msg_2);
-			data_pub_3.publish(&data_msg_3);
 
+			ctrl.lock();
+			// check that it have already received values from Axis Neuron
+			if (_valuesBuffer != NULL && _valuesBuffer[114]) {
+
+				for (int i = 0; i < MAX_DATA_LENGTH; i++) {
+					data_msg_1.data[i] = _valuesBuffer[i];
+					data_msg_2.data[i] = _valuesBuffer[i + MAX_DATA_LENGTH];
+					data_msg_3.data[i] = _valuesBuffer[i + 2 * MAX_DATA_LENGTH];
+				}
+				// Publish part one of the array
+				data_pub_1.publish(&data_msg_1);
+				data_pub_2.publish(&data_msg_2);
+				data_pub_3.publish(&data_msg_3);
+
+			}
+			ctrl.unlock();
+			nh.spinOnce();
+			Sleep(50);
 		}
-		ctrl.unlock();
-		nh.spinOnce();
-		Sleep(50);
+	} else if(portAxisNeuron == CALC_PORT) {
+		data_msg_1.data_offset = 0;
+		data_msg_2.data_offset = 1;
+		ros::Publisher data_pub_1("/perception_neuron/QUAT_data_1", &data_msg_1);
+		ros::Publisher data_pub_2("/perception_neuron/QUAT_data_2", &data_msg_2);
+		nh.advertise(data_pub_1);
+		nh.advertise(data_pub_2);
+		while (1)
+		{
+			if (verbose) {
+				printf("QUAT: Current Data Frame %i \n", _frameCount);
+			}
+			ctrl.lock();
+			// check that it have already received values from Axis Neuron
+			if (_valuesBuffer != NULL && _valuesBuffer[114]) {
+				for (int i = 0; i < 30; i++) {
+					data_msg_1.data[i] = _valuesBuffer[i*16 + 6];
+					data_msg_1.data[i + 1] = _valuesBuffer[i*16 + 7];
+					data_msg_1.data[i + 2] = _valuesBuffer[i*16 + 8];
+					data_msg_1.data[i + 3] = _valuesBuffer[i*16 + 9];
+				}
+
+				for (int i = 31; i < 59; i++) {
+					data_msg_1.data[i - 31] = _valuesBuffer[i*16 + 6];
+					data_msg_1.data[i + 1 - 31] = _valuesBuffer[i*16 + 7];
+					data_msg_1.data[i + 2 - 31] = _valuesBuffer[i*16 + 8];
+					data_msg_1.data[i + 3 - 31] = _valuesBuffer[i*16 + 9];
+				}
+				// Publish part one of the array
+				data_pub_1.publish(&data_msg_1);
+				data_pub_2.publish(&data_msg_2);
+			}
+			ctrl.unlock();
+			nh.spinOnce();
+			Sleep(50);
+		}
 	}
+
 	BRCloseSocket(neuronptr);
 	printf("All done!\n");
 	return 0;
