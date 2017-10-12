@@ -1,4 +1,5 @@
 <launch>
   <node name="socket_node" pkg="rosserial_server" type="socket_node" output="screen" />
+  <node pkg="rosserial_python" type="message_info_service.py" name="rosserial_message_info" />
   <node name="perception_neuron_tf_broadcaster_node" pkg="perception_neuron_tf_broadcaster" type="perception_neuron_tf_broadcaster_node" output="screen" />
 </launch>
